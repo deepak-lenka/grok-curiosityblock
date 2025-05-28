@@ -23,8 +23,13 @@ class ResearchRequest(BaseModel):
     intent_topic: str
     third_topic: Optional[str] = None
 
+class RelatedTopicsRequest(BaseModel):
+    topics: List[str]
+
 class ResearchResponse(BaseModel):
     research_output: Dict[str, Any]
+
+class RelatedTopicsResponse(BaseModel):
     related_topics: List[Dict[str, str]]
 
 # Function to get Grok client
@@ -166,6 +171,76 @@ def generate_research(primary_topic: str, intent_topic: str, third_topic: Option
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error calling Grok API: {str(e)}")
 
+# Function to generate related topics based on provided topics
+def generate_related_topics(topics: List[str]):
+    client = get_grok_client()
+    
+    # Construct the prompt for related topics
+    system_prompt = """
+    You are a multidisciplinary research assistant specializing in connecting diverse academic topics.
+    Your task is to suggest related topics that would expand the research on the provided topics.
+    
+    For each suggested topic, provide:
+    1. The topic name
+    2. A brief explanation of how it connects to the provided topics
+    3. Why exploring this connection would be valuable
+    
+    Format your response as a JSON object with the following structure:
+    {
+        "related_topics": [
+            {
+                "topic": "Related Topic 1",
+                "relevance": "Explanation of how this topic connects to the current research"
+            },
+            {
+                "topic": "Related Topic 2",
+                "relevance": "Explanation of how this topic connects to the current research"
+            },
+            {
+                "topic": "Related Topic 3",
+                "relevance": "Explanation of how this topic connects to the current research"
+            }
+        ]
+    }
+    """
+    
+    # Construct the user prompt based on provided topics
+    topics_str = ", ".join(topics[:-1]) + f", and {topics[-1]}" if len(topics) > 1 else topics[0]
+    user_prompt = f"Suggest related topics that would expand research on {topics_str}. Focus on topics that create interesting interdisciplinary connections."
+    
+    try:
+        # Call Grok API
+        completion = client.chat.completions.create(
+            model="grok-3",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.8,
+            max_tokens=1000,
+        )
+        
+        # Extract the response
+        response_text = completion.choices[0].message.content
+        
+        # Extract JSON from the response
+        try:
+            # Find JSON content (it might be wrapped in markdown code blocks)
+            if "```json" in response_text:
+                json_str = response_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_text:
+                json_str = response_text.split("```")[1].split("```")[0].strip()
+            else:
+                json_str = response_text
+                
+            related_topics_data = json.loads(json_str)
+            return related_topics_data
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=500, detail="Failed to parse the response from Grok API")
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error calling Grok API: {str(e)}")
+
 # API endpoints
 @app.get("/")
 async def root():
@@ -186,7 +261,19 @@ async def create_research(request: ResearchRequest):
         third_topic=request.third_topic
     )
     
-    return research_data
+    # Extract only the research_output part
+    return {"research_output": research_data["research_output"]}
+
+@app.post("/related-topics/", response_model=RelatedTopicsResponse)
+async def get_related_topics(request: RelatedTopicsRequest):
+    """
+    Generate related topics based on the provided topics.
+    
+    - **topics**: List of topics to find related topics for
+    """
+    related_topics_data = generate_related_topics(request.topics)
+    
+    return related_topics_data
 
 @app.get("/health/")
 async def health_check():
