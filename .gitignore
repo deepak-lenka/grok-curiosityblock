@@ -23,6 +23,11 @@ var/
 .installed.cfg
 *.egg
 
+# Output files
+research_output.json
+related_topics.json
+*.json
+
 # Virtual Environment
 venv/
 ENV/
