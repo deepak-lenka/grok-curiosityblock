@@ -21,13 +21,19 @@ app = FastAPI(
 class ResearchRequest(BaseModel):
     primary_topic: str
     intent_topic: str
-    third_topic: Optional[str] = None
+    previous_topics: Optional[List[str]] = None
+
+class ContinueResearchRequest(BaseModel):
+    topics: List[str]  # All existing topics
+    next_topic: str    # New topic to connect
 
 class RelatedTopicsRequest(BaseModel):
     topics: List[str]
 
 class ResearchResponse(BaseModel):
     research_output: Dict[str, Any]
+    related_topics: List[Dict[str, str]]
+    connection_path: str
 
 class RelatedTopicsResponse(BaseModel):
     related_topics: List[Dict[str, str]]
@@ -44,7 +50,7 @@ def get_grok_client():
     )
 
 # Function to generate multidisciplinary research
-def generate_research(primary_topic: str, intent_topic: str, third_topic: Optional[str] = None):
+def generate_research(primary_topic: str, intent_topic: str, previous_topics: Optional[List[str]] = None):
     client = get_grok_client()
     
     # Construct the prompt based on the examples
@@ -133,8 +139,10 @@ def generate_research(primary_topic: str, intent_topic: str, third_topic: Option
     """
     
     # Construct the user prompt based on provided topics
-    if third_topic:
-        user_prompt = f"Create a multidisciplinary research output connecting {primary_topic}, {intent_topic}, and {third_topic}. Pay special attention to the interconnections between all three topics."
+    if previous_topics and len(previous_topics) > 0:
+        # Format all previous topics as a comma-separated string
+        previous_topics_str = ", ".join(previous_topics)
+        user_prompt = f"Create a multidisciplinary research output connecting {primary_topic}, {intent_topic}, and the following previous topics: {previous_topics_str}. Pay special attention to the interconnections between all topics."
     else:
         user_prompt = f"Create a multidisciplinary research output connecting {primary_topic} and {intent_topic}. Focus on meaningful connections between these topics across different academic disciplines."
     
@@ -253,16 +261,70 @@ async def create_research(request: ResearchRequest):
     
     - **primary_topic**: The first topic to explore
     - **intent_topic**: The second topic to connect with the primary topic
-    - **third_topic**: Optional third topic to connect with the first two
+    - **previous_topics**: Optional array of previously explored topics to connect with the first two
     """
     research_data = generate_research(
         primary_topic=request.primary_topic,
         intent_topic=request.intent_topic,
-        third_topic=request.third_topic
+        previous_topics=request.previous_topics
     )
     
-    # Extract only the research_output part
-    return {"research_output": research_data["research_output"]}
+    # Create connection path string
+    all_topics = [request.primary_topic, request.intent_topic]
+    if request.previous_topics and len(request.previous_topics) > 0:
+        all_topics.extend(request.previous_topics)
+    connection_path = " → ".join(all_topics)
+    
+    return {
+        "research_output": research_data["research_output"],
+        "related_topics": research_data["related_topics"],
+        "connection_path": connection_path
+    }
+
+@app.post("/continue-research/", response_model=ResearchResponse)
+async def continue_research(request: ContinueResearchRequest):
+    """
+    Continue research by adding a new topic while maintaining all previous connections.
+    
+    - **topics**: List of all existing connected topics
+    - **next_topic**: New topic to connect with the existing topics
+    """
+    # Get the current topics and the new topic to connect
+    current_topics = request.topics
+    next_topic = request.next_topic
+    topic_count = len(current_topics)
+    
+    if topic_count < 2:
+        raise HTTPException(status_code=400, detail="At least two existing topics are required")
+    
+    # Use the new approach with previous_topics parameter
+    # First two topics remain as primary and intent topics
+    # All other existing topics plus the new topic go into previous_topics
+    previous_topics = []
+    
+    if topic_count > 2:
+        # Add all topics from index 2 onwards to previous_topics
+        previous_topics.extend(current_topics[2:])
+    
+    # Add the new topic to previous_topics
+    previous_topics.append(next_topic)
+    
+    # Generate research with the new structure
+    research_data = generate_research(
+        primary_topic=current_topics[0],
+        intent_topic=current_topics[1],
+        previous_topics=previous_topics
+    )
+    
+    # Create updated topics list and connection path
+    updated_topics = current_topics + [next_topic]
+    connection_path = " → ".join(updated_topics)
+    
+    return {
+        "research_output": research_data["research_output"],
+        "related_topics": research_data["related_topics"],
+        "connection_path": connection_path
+    }
 
 @app.post("/related-topics/", response_model=RelatedTopicsResponse)
 async def get_related_topics(request: RelatedTopicsRequest):
